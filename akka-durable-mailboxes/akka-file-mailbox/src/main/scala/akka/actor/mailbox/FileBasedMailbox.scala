@@ -22,7 +22,7 @@ class FileBasedMailboxType(systemSettings: ActorSystem.Settings, config: Config)
   }
 }
 
-class FileBasedMessageQueue(_owner: ActorContext, val settings: FileBasedMailboxSettings) extends DurableMessageQueue(_owner) with DurableMessageSerialization {
+class FileBasedMessageQueue(_owner: ActorContext, val settings: FileBasedMailboxSettings) extends DurableMessageQueue(_owner, settings) with DurableMessageSerialization {
   // TODO Is it reasonable for all FileBasedMailboxes to have their own logger?
   private val log = Logging(system, "FileBasedMessageQueue")
 
@@ -42,18 +42,24 @@ class FileBasedMessageQueue(_owner: ActorContext, val settings: FileBasedMailbox
       throw e
   }
 
-  def enqueue(receiver: ActorRef, envelope: Envelope): Unit = queue.add(serialize(envelope))
-
-  def dequeue(): Envelope = try {
-    queue.remove.map(item ⇒ { queue.confirmRemove(item.xid); deserialize(item.data) }).orNull
-  } catch {
-    case _: java.util.NoSuchElementException ⇒ null
-    case NonFatal(e) ⇒
-      log.error(e, "Couldn't dequeue from file-based mailbox")
-      throw e
+  def enqueue(receiver: ActorRef, envelope: Envelope) = withCircuitBreaker {
+    queue.add(serialize(envelope))
   }
 
-  def numberOfMessages: Int = queue.length.toInt
+  def dequeue(): Envelope = withCircuitBreaker {
+    try {
+    queue.remove.map(item ⇒ { queue.confirmRemove(item.xid); deserialize(item.data) }).orNull
+    } catch {
+    case _: java.util.NoSuchElementException ⇒ null
+    case NonFatal(e) ⇒
+        log.error(e, "Couldn't dequeue from file-based mailbox")
+        throw e
+    }
+  }
+
+  def numberOfMessages: Int = withCircuitBreaker {
+    queue.length.toInt
+  }
 
   def hasMessages: Boolean = numberOfMessages > 0
 
